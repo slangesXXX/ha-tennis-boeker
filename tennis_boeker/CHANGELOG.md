@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.4.0
+- Geplande boekingen wijzigen: klik **Wijzigen** onder een boeking bij *Ingepland* en pas
+  datum, tijd, medespeler, voorkeursbaan of reservetijd aan.
+- Ook bij wijzigen worden de clubregels gecontroleerd (max. per dag, niet twee uur achter elkaar).
+- Bij een vaste boeking geldt de wijziging alleen voor die ene week.
+
 ## 1.3.1
 - Geslaagde boeking werd soms als "mislukt" gemeld (antwoord van de clubsite was al weg door
   de doorverwijzing). Nu controleert de add-on in dat geval je overzicht op de clubsite.

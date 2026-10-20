@@ -11,6 +11,7 @@ Draait volledig zelfstandig in Home Assistant.
 - **Vaste boeking**: vink "Elke week herhalen" aan.
 - **Reservetijd**: vink aan en kies een later uur; alleen gebruikt als de eerste tijd mislukt.
 - **Clubregels**: waarschuwt bij meer dan `max_boekingen_per_dag` per dag of twee uur achter elkaar.
+- **Wijzigen**: geplande boekingen aanpassen (datum, tijd, medespeler, baan, reservetijd).
 - **Mijn banen**: je echte boekingen van de clubsite, met annuleerknop.
 - **Meldingen met knoppen** (Companion-app): geplande boeking of geboekte baan annuleren.
 - **Sensoren**: `sensor.tennis_volgende_baan` en `sensor.tennis_volgende_boekpoging`.

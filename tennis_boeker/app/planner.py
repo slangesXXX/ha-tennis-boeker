@@ -163,6 +163,65 @@ def annuleer(job_id: str, reden: str = "geannuleerd") -> None:
     werk_sensoren_bij()
 
 
+def wijzig(job_id: str, datum: str, tijd: str, partner: str, voorkeursbaan: int | None,
+           reserve_tijd: str | None) -> str:
+    """Past een geplande boeking aan (datum, tijd, medespeler, baan, reservetijd)."""
+    j = job(job_id)
+    if not j or j.get("reserve_van"):
+        raise ValueError("Deze boeking bestaat niet (meer).")
+    if j["status"] != "gepland":
+        raise ValueError("Deze boeking is al bezig of afgerond en kan niet meer gewijzigd worden.")
+    _, _, oude_start = momenten(j["datum"], j["tijd"])
+    if oude_start - nu() < timedelta(seconds=30):
+        raise ValueError("De add-on is al met deze boeking bezig; wijzigen kan niet meer.")
+    partner = (partner or "").strip() or j["partner"]
+    speelmoment, _, start = momenten(datum, tijd)
+    if speelmoment <= nu():
+        raise ValueError("Dat moment ligt in het verleden.")
+    if reserve_tijd and reserve_tijd <= tijd:
+        raise ValueError("De reservetijd moet later zijn dan de gewenste tijd.")
+    eigen = (j["id"], j.get("reserve_id") or "")
+    with SLOT:
+        lijst = plannen()
+        for p in lijst:
+            if (p["id"] not in eigen and (p["datum"], p["tijd"]) == (datum, tijd)
+                    and p["status"] in ACTIEF):
+                raise ValueError(f"Voor {dag_tekst(datum, tijd)} staat al een boeking ingepland.")
+        if not j.get("test"):
+            if (fout := conflict(datum, tijd, negeer=eigen)):
+                raise ValueError(fout)
+            if reserve_tijd and (fout := conflict(datum, reserve_tijd, negeer=eigen)):
+                raise ValueError(f"Reservetijd {reserve_tijd}: {fout}")
+        # oude versie stoppen en vervangen door de nieuwe
+        for jid in eigen:
+            if jid:
+                STOP.setdefault(jid, threading.Event()).set()
+        hoofd = {"id": uuid.uuid4().hex[:8], "datum": datum, "tijd": tijd, "partner": partner,
+                 "test": j.get("test", False), "status": "gepland", "reeks": j.get("reeks"),
+                 "voorkeursbaan": voorkeursbaan, "aangemaakt": j.get("aangemaakt"),
+                 "gewijzigd": f"{nu():%d-%m %H:%M}"}
+        if j.get("reeks"):
+            hoofd["reeks_datum"] = j.get("reeks_datum") or j["datum"]
+        nieuw = [hoofd]
+        if reserve_tijd:
+            reserve = dict(hoofd, id=uuid.uuid4().hex[:8], tijd=reserve_tijd, status="wacht",
+                           reserve_van=hoofd["id"])
+            hoofd["reserve_id"] = reserve["id"]
+            nieuw.append(reserve)
+        _schrijf(PLANNEN, [p for p in lijst if p["id"] not in eigen] + nieuw)
+    for n in nieuw:
+        start_thread(n)
+    wanneer = "nu direct (de baan is al open)" if start <= nu() else \
+        f"{DAGEN[start.weekday()]} {start:%d-%m %H:%M}"
+    tekst = (f"{dag_tekst(datum, tijd)} met {partner}"
+             f"{f', voorkeur baan {voorkeursbaan}' if voorkeursbaan else ''}"
+             f"{f', reserve {reserve_tijd}' if reserve_tijd else ''}. Start: {wanneer}.")
+    log(f"Gewijzigd ({dag_tekst(j['datum'], j['tijd'])} → {tekst})")
+    ha.meld("Tennisboeking gewijzigd", tekst, [(f"ANNULEER_{hoofd['id']}", "Annuleren")])
+    werk_sensoren_bij()
+    return f"Gewijzigd: {tekst}"
+
+
 def verwijder(job_id: str) -> None:
     with SLOT:
         _schrijf(PLANNEN, [p for p in plannen()
@@ -287,7 +346,8 @@ def vul_reeksen() -> None:
             _, opening, _ = momenten(datum, r["tijd"])
             if opening <= nu():
                 continue                     # te laat voor deze week
-            if any(p.get("reeks") == r["id"] and p["datum"] == datum for p in plannen()):
+            if any(p.get("reeks") == r["id"] and p.get("reeks_datum", p["datum"]) == datum
+                   for p in plannen()):
                 continue                     # bestaat al (of is bewust geannuleerd)
             try:
                 plan(datum, r["tijd"], r["partner"], reserve_tijd=r.get("reserve_tijd"),

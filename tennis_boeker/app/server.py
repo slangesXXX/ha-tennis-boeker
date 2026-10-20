@@ -76,29 +76,67 @@ border:1px solid currentColor;margin-left:6px;white-space:nowrap}
 .klein{font-size:12px;color:var(--zacht)}a{color:var(--accent)}.leeg{color:var(--zacht);font-size:14px;margin:0}
 pre{white-space:pre-wrap;font-size:12px;margin:0;max-height:300px;overflow:auto}
 details>summary{cursor:pointer;font-weight:600}
-.verborgen{display:none!important}.inline{display:inline;margin:0}
+.verborgen{display:none!important}
+.item:has(+ details.wijzig){border-bottom:none;padding-bottom:4px}
+details.wijzig{margin:0;padding:0 0 10px;border-bottom:1px solid var(--rand)}
+details.wijzig>summary{font-weight:500;font-size:14px;color:var(--accent);display:inline-block}
+details.wijzig[open]>summary{margin-bottom:10px}
+details.wijzig form{background:var(--bg);border-radius:10px;padding:12px}.inline{display:inline;margin:0}
 """
 
 JS = """
-const f=document.querySelector('form.plan');
 const kort=['zo','ma','di','wo','do','vr','za'],lang=['zondag','maandag','dinsdag','woensdag','donderdag','vrijdag','zaterdag'];
-function hint(){const d=f.datum.value,t=f.tijd.value;if(!d)return;
- const s=new Date(d+'T'+t);const o=new Date(s.getTime()-DAGEN_VOORUIT*864e5);
- document.getElementById('hint').textContent=lang[s.getDay()]+' · baan gaat open '+kort[o.getDay()]+' '+
- o.toLocaleDateString('nl-NL',{day:'2-digit',month:'2-digit'})+' '+t+(f.herhaal.checked?' · daarna elke week':'');}
-function toon(){document.getElementById('anders').classList.toggle('verborgen',f.partner.value!=='__anders__');
- document.getElementById('reservevak').classList.toggle('verborgen',!f.reserve.checked);
- if(f.reserve.checked&&f.reserve_tijd.value<=f.tijd.value){const u=Math.min(23,parseInt(f.tijd.value)+1);
- f.reserve_tijd.value=String(u).padStart(2,'0')+':00';}hint();}
-f.addEventListener('change',()=>{f.dataset.bezig=1;toon();});f.addEventListener('input',()=>f.dataset.bezig=1);toon();
+function bijwerken(f){
+ const anders=f.querySelector('.anders'); if(anders) anders.classList.toggle('verborgen',f.partner.value!=='__anders__');
+ const rv=f.querySelector('.reservevak');
+ if(rv&&f.reserve){rv.classList.toggle('verborgen',!f.reserve.checked);
+  if(f.reserve.checked&&f.reserve_tijd.value<=f.tijd.value){const u=Math.min(23,parseInt(f.tijd.value)+1);
+  f.reserve_tijd.value=String(u).padStart(2,'0')+':00';}}
+ const h=f.querySelector('.hint'),d=f.datum.value,t=f.tijd.value; if(!h||!d)return;
+ const s=new Date(d+'T'+t),o=new Date(s.getTime()-DAGEN_VOORUIT*864e5);
+ h.textContent=lang[s.getDay()]+' · baan gaat open '+kort[o.getDay()]+' '+
+  o.toLocaleDateString('nl-NL',{day:'2-digit',month:'2-digit'})+' '+t+(f.herhaal&&f.herhaal.checked?' · daarna elke week':'');}
+let bezig=false;
+document.querySelectorAll('form.plan').forEach(f=>{
+ f.addEventListener('change',()=>{bezig=true;bijwerken(f);}); f.addEventListener('input',()=>bezig=true); bijwerken(f);});
 document.querySelectorAll('form[data-vraag]').forEach(x=>x.addEventListener('submit',ev=>{
  if(!confirm(x.dataset.vraag))ev.preventDefault();}));
-setInterval(()=>{if(!f.dataset.bezig&&!document.querySelector('details[open]'))location.replace('./');},60000);
+setInterval(()=>{if(!bezig&&!document.querySelector('details[open]'))location.replace('./');},60000);
 """
 
 STATUS = {"gepland": "Gepland", "wacht": "Reserve", "bezig": "Bezig…", "geboekt": "Geboekt",
           "mislukt": "Mislukt", "geannuleerd": "Geannuleerd", "verlopen": "Verlopen",
           "niet nodig": "Niet nodig", "overgeslagen": "Overgeslagen"}
+
+
+def opties(waarden: list, gekozen, labels: dict | None = None) -> str:
+    labels = labels or {}
+    return "".join(f'<option value="{e(str(w))}"{" selected" if str(w) == str(gekozen) else ""}>'
+                   f'{e(labels.get(w, str(w)))}</option>' for w in waarden)
+
+
+def wijzig_formulier(p: dict, reserve: dict | None, namen: list[str], tijden: list[str]) -> str:
+    """Inklapbaar formulier om een geplande boeking aan te passen."""
+    partners = namen if p["partner"] in namen else [p["partner"]] + namen
+    banen = list(range(0, CFG["aantal_banen"] + 1))
+    heeft_reserve = bool(reserve and reserve["status"] in planner.ACTIEF)
+    r_tijd = reserve["tijd"] if heeft_reserve else ""
+    return f"""<details class="wijzig"><summary>Wijzigen</summary>
+<form class="plan" method="post" action="wijzig"><input type="hidden" name="id" value="{e(p['id'])}">
+<div class="velden">
+<label>Speeldatum<input type="date" name="datum" value="{e(p['datum'])}" min="{nu():%Y-%m-%d}" required></label>
+<label>Starttijd<select name="tijd">{opties(tijden, p['tijd'])}</select></label>
+<label>Medespeler<select name="partner">{opties(partners + ['__anders__'], p['partner'], {'__anders__': 'Andere naam…'})}</select></label>
+<label>Voorkeursbaan<select name="baan">{opties(banen, p.get('voorkeursbaan') or 0, {0: 'Geen voorkeur', **{n: f'Baan {n}' for n in banen if n}})}</select></label>
+<label class="anders verborgen">Naam medespeler<input name="anders" placeholder="Voor- en achternaam"></label>
+</div>
+<div class="opties">
+<label class="check"><input type="checkbox" name="reserve"{' checked' if heeft_reserve else ''}> Reservetijd als het niet lukt</label>
+<label class="reservevak verborgen"><select name="reserve_tijd">{opties(tijden, r_tijd)}</select></label>
+</div>
+<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+<button>Wijziging opslaan</button><span class="hint klein"></span></div>
+</form></details>"""
 
 
 def knop(actie: str, label: str, waarde: str = "", klasse: str = "link", vraag: str = "") -> str:
@@ -178,16 +216,16 @@ def pagina(bericht: str = "", fout: bool = False) -> str:
 <label>Starttijd<select name="tijd">{opties_t}</select></label>
 <label>Medespeler<select name="partner">{opties_p}</select></label>
 <label>Voorkeursbaan<select name="baan">{opties_b}</select></label>
-<label id="anders" class="verborgen">Naam medespeler<input name="anders" placeholder="Voor- en achternaam"></label>
+<label class="anders verborgen">Naam medespeler<input name="anders" placeholder="Voor- en achternaam"></label>
 </div>
 <div class="opties">
 <label class="check"><input type="checkbox" name="herhaal"> Elke week herhalen</label>
 <label class="check"><input type="checkbox" name="reserve"> Reservetijd als het niet lukt</label>
-<label id="reservevak" class="verborgen"><select name="reserve_tijd">{opties_r}</select></label>
+<label class="reservevak verborgen"><select name="reserve_tijd">{opties_r}</select></label>
 <label class="check"><input type="checkbox" name="test"> Test (niet bevestigen)</label>
 </div>
 <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-<button class="groot">Plan boeking</button><span id="hint" class="klein"></span></div>
+<button class="groot">Plan boeking</button><span class="hint klein"></span></div>
 </form></div>"""
 
     # ---- mijn banen (clubsite)
@@ -225,9 +263,11 @@ def pagina(bericht: str = "", fout: bool = False) -> str:
         sub = (f"met {e(p['partner'])} · opent {DAGEN[opening.weekday()][:2]} {opening:%d-%m %H:%M}"
                + (f" · {', '.join(extra)}" if extra else ""))
         actie = knop("annuleer", "Annuleren", p["id"]) if p["status"] == "gepland" else ""
+        r = per_id.get(p.get("reserve_id") or "")
         regels += (f'<div class="item"><div><b>{dag_tekst(p["datum"], p["tijd"])}</b>'
                    f'{status_label(p["status"])}<div class="sub">{sub}</div></div>{actie}</div>')
-        r = per_id.get(p.get("reserve_id") or "")
+        if p["status"] == "gepland":
+            regels += wijzig_formulier(p, r, namen, tijden)
         if r and r["status"] in planner.ACTIEF:
             regels += (f'<div class="item reserve"><div>↳ Reserve <b>{e(r["tijd"])}</b>'
                        f'{status_label(r["status"])}<div class="sub">alleen als {e(p["tijd"])} niet lukt</div>'
@@ -306,6 +346,10 @@ def voer_actie(actie: str, v: dict) -> str:
             return planner.maak_reeks(v["datum"], v["tijd"], partner, reserve, baan)
         return planner.plan(v["datum"], v["tijd"], partner, test="test" in v, reserve_tijd=reserve,
                             voorkeursbaan=baan)
+    if actie == "wijzig":
+        partner = v.get("anders", "").strip() if v.get("partner") == "__anders__" else v.get("partner", "")
+        reserve = v.get("reserve_tijd") if "reserve" in v else None
+        return planner.wijzig(v["id"], v["datum"], v["tijd"], partner, int(v.get("baan") or 0), reserve)
     if actie == "annuleer":
         planner.annuleer(v["id"])
         return "Geplande boeking geannuleerd."
