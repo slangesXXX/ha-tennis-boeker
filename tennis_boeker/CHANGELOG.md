@@ -1,5 +1,9 @@
 # Wijzigingen
 
+## 1.3.1
+- Geslaagde boeking werd soms als "mislukt" gemeld (antwoord van de clubsite was al weg door
+  de doorverwijzing). Nu controleert de add-on in dat geval je overzicht op de clubsite.
+
 ## 1.3.0
 - Verhuisd naar GitHub: updates verschijnen nu als **Bijwerken** in Home Assistant.
 - Versienummer zichtbaar bovenaan het dashboard en in het logboek.

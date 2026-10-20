@@ -353,14 +353,29 @@ def kies_slot_en_bevestig(page: Page, select, speelmoment: datetime, partner: st
     if test:
         log("TESTMODUS: gestopt vlak voor 'Bevestigen'.")
         return
+    bevestig(page, speelmoment, partner)
+
+
+def bevestig(page: Page, speelmoment: datetime, partner: str) -> None:
+    """Klikt 'Bevestigen' op de bevestigpagina en controleert of de boeking gelukt is."""
     # 'Bevestigen' werkt via JavaScript van de site: wachten tot die geladen is
     page.wait_for_load_state("load")
     page.wait_for_function("() => window.jQuery !== undefined", timeout=10000)
     with page.expect_response(lambda r: "SaveReservation" in r.url, timeout=15000) as info:
         page.locator("#confirmReservationButton").click()
-    antwoord = info.value.text()
-    if "Guid" in antwoord:
+    # De site stuurt na een geslaagde boeking direct door naar het overzicht; daardoor is het
+    # antwoord soms al weg voordat we het kunnen lezen. Dan controleren we het overzicht zelf.
+    try:
+        antwoord = info.value.text()
+    except Exception:
+        antwoord = None
+    if antwoord is not None and "Guid" in antwoord:
         return
+    if antwoord is None or not antwoord.strip():
+        if staat_in_overzicht(page, speelmoment):
+            log("Boeking bevestigd via het overzicht op de clubsite.")
+            return
+        raise Geweigerd("Geen antwoord van de clubsite en de boeking staat niet in je overzicht.")
     fout = antwoord.replace('"', "").strip() or f"HTTP {info.value.status}"
     f = norm(fout)
     if any(w in f for w in CFG["foutwoorden_baan_bezet"]):
@@ -369,6 +384,21 @@ def kies_slot_en_bevestig(page: Page, select, speelmoment: datetime, partner: st
     if achternaam in f or any(w in f for w in CFG["foutwoorden_partner"]):
         raise PartnerBezet(fout)
     raise Geweigerd(fout)
+
+
+def staat_in_overzicht(page: Page, speelmoment: datetime) -> bool:
+    """Kijkt op 'Mijn boekingen' of er een boeking op dit moment staat."""
+    datum, tijd = f"{speelmoment:%Y-%m-%d}", f"{speelmoment:%H:%M}"
+    for poging in range(3):
+        try:
+            page.wait_for_load_state("domcontentloaded")
+            page.goto(URL_OVERZICHT, wait_until="domcontentloaded")
+            if any(b["datum"] == datum and b["tijd"] == tijd for b in lees_clubboekingen(page)):
+                return True
+        except Exception as e:
+            log(f"Overzicht controleren mislukt (poging {poging + 1}): {e}")
+        page.wait_for_timeout(1000)
+    return False
 
 
 def probeer_te_boeken(page: Page, speelmoment: datetime, partners: list[str],
