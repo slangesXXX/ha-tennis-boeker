@@ -1,5 +1,9 @@
 # Wijzigingen
 
+## 1.4.1
+- Boeken op dagen 1 t/m 9 van de maand mislukte: de clubsite schrijft '3-11-2026', de add-on
+  zocht naar '03-11-2026' en stopte voor de zekerheid. Beide schrijfwijzen worden nu herkend.
+
 ## 1.4.0
 - Geplande boekingen wijzigen: klik **Wijzigen** onder een boeking bij *Ingepland* en pas
   datum, tijd, medespeler, voorkeursbaan of reservetijd aan.

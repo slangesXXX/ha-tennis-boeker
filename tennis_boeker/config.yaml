@@ -1,5 +1,5 @@
 name: Tennis Boeker
-version: "1.4.0"
+version: "1.4.1"
 slug: tennis_boeker
 url: https://github.com/slangesXXX/ha-tennis-boeker
 description: Boekt automatisch een tennisbaan bij je KNLTB.Club-vereniging zodra die opengaat

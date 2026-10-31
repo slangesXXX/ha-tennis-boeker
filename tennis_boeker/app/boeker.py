@@ -321,6 +321,14 @@ def rooster_info(page: Page, speelmoment: datetime) -> str:
         return f"(rooster niet leesbaar: {e})"
 
 
+def bevestigpagina_klopt(tekst: str, speelmoment: datetime) -> bool:
+    """Staat de juiste datum en tijd op de bevestigpagina? De site schrijft dagen en maanden
+    zonder voorloopnul ('3-11-2026'), maar we accepteren beide schrijfwijzen."""
+    patroon = (rf"(?<!\d)0?{speelmoment.day}-0?{speelmoment.month}-{speelmoment.year}"
+               rf" van {speelmoment:%H:%M}")
+    return re.search(patroon, tekst) is not None
+
+
 def kies_slot_en_bevestig(page: Page, select, speelmoment: datetime, partner: str,
                           test: bool) -> None:
     # Slot kiezen: precies de velden invullen die de site-JavaScript ook invult
@@ -345,8 +353,8 @@ def kies_slot_en_bevestig(page: Page, select, speelmoment: datetime, partner: st
                               f"{start_utc:%H:%M}-{eind_utc:%H:%M} UTC). "
                               f"{melding_van_site(page)}")
     tekst = norm(page.locator("body").inner_text())
-    verwacht = f"{speelmoment:%d-%m-%Y} van {speelmoment:%H:%M}"
-    if verwacht not in tekst:
+    if not bevestigpagina_klopt(tekst, speelmoment):
+        verwacht = f"{speelmoment.day}-{speelmoment.month}-{speelmoment.year} van {speelmoment:%H:%M}"
         raise RuntimeError(f"Bevestigpagina toont niet {verwacht} - gestopt voor de zekerheid")
     if norm(partner) not in tekst:
         raise RuntimeError("SESSIE_KWIJT")   # medespeler niet meer geselecteerd
