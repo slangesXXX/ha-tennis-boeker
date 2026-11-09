@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import boeker
 import planner
+import uitnodiging
 from boeker import CFG, DAGEN, LOGMAP, log, momenten, nu
 from planner import dag_tekst
 
@@ -115,6 +116,22 @@ def opties(waarden: list, gekozen, labels: dict | None = None) -> str:
                    f'{e(labels.get(w, str(w)))}</option>' for w in waarden)
 
 
+def uitnodiging_vak(aan: bool = True) -> str:
+    """Vinkje voor agenda-afspraak (+ mail aan de medespeler); alleen als dat is ingesteld."""
+    if not uitnodiging.beschikbaar():
+        return ""
+    delen = ["afspraak in je agenda"] if uitnodiging.ha.agenda_entity() else []
+    if uitnodiging.mail_klaar():
+        delen.append("uitnodiging per mail aan je medespeler (als zijn/haar adres bekend is)")
+    return (f'<label class="check"><input type="checkbox" name="uitnodiging"{" checked" if aan else ""}> '
+            f'Agenda: {" + ".join(delen)}</label>')
+
+
+def uitnodiging_vlag(v: dict) -> bool:
+    """Zonder zichtbaar vinkje (niet ingesteld) geldt de standaard: aan."""
+    return ("uitnodiging" in v) if uitnodiging.beschikbaar() else True
+
+
 def wijzig_formulier(p: dict, reserve: dict | None, namen: list[str], tijden: list[str]) -> str:
     """Inklapbaar formulier om een geplande boeking aan te passen."""
     partners = namen if p["partner"] in namen else [p["partner"]] + namen
@@ -133,6 +150,7 @@ def wijzig_formulier(p: dict, reserve: dict | None, namen: list[str], tijden: li
 <div class="opties">
 <label class="check"><input type="checkbox" name="reserve"{' checked' if heeft_reserve else ''}> Reservetijd als het niet lukt</label>
 <label class="reservevak verborgen"><select name="reserve_tijd">{opties(tijden, r_tijd)}</select></label>
+{uitnodiging_vak(p.get('uitnodiging', True))}
 </div>
 <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
 <button>Wijziging opslaan</button><span class="hint klein"></span></div>
@@ -155,6 +173,7 @@ def reeks_formulier(r: dict, namen: list[str], tijden: list[str]) -> str:
 <div class="opties">
 <label class="check"><input type="checkbox" name="reserve"{' checked' if r.get('reserve_tijd') else ''}> Reservetijd als het niet lukt</label>
 <label class="reservevak verborgen"><select name="reserve_tijd">{opties(tijden, r.get('reserve_tijd') or '')}</select></label>
+{uitnodiging_vak(r.get('uitnodiging', True))}
 </div>
 <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
 <button>Wijziging opslaan</button><span class="klein">Geldt voor alle komende weken. Weken die je los hebt gewijzigd blijven zoals ze zijn.</span></div>
@@ -245,6 +264,7 @@ def pagina(bericht: str = "", fout: bool = False) -> str:
 <label class="check"><input type="checkbox" name="reserve"> Reservetijd als het niet lukt</label>
 <label class="reservevak verborgen"><select name="reserve_tijd">{opties_r}</select></label>
 <label class="check"><input type="checkbox" name="test"> Test (niet bevestigen)</label>
+{uitnodiging_vak()}
 </div>
 <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
 <button class="groot">Plan boeking</button><span class="hint klein"></span></div>
@@ -365,18 +385,20 @@ def voer_actie(actie: str, v: dict) -> str:
         if "herhaal" in v:
             if "test" in v:
                 raise ValueError("Een vaste boeking kan niet als test.")
-            return planner.maak_reeks(v["datum"], v["tijd"], partner, reserve, baan)
+            return planner.maak_reeks(v["datum"], v["tijd"], partner, reserve, baan,
+                                      uitnodiging_vlag(v))
         return planner.plan(v["datum"], v["tijd"], partner, test="test" in v, reserve_tijd=reserve,
-                            voorkeursbaan=baan)
+                            voorkeursbaan=baan, agenda_uitnodiging=uitnodiging_vlag(v))
     if actie == "wijzig":
         partner = v.get("anders", "").strip() if v.get("partner") == "__anders__" else v.get("partner", "")
         reserve = v.get("reserve_tijd") if "reserve" in v else None
-        return planner.wijzig(v["id"], v["datum"], v["tijd"], partner, int(v.get("baan") or 0), reserve)
+        return planner.wijzig(v["id"], v["datum"], v["tijd"], partner, int(v.get("baan") or 0), reserve,
+                              uitnodiging_vlag(v))
     if actie == "wijzigreeks":
         partner = v.get("anders", "").strip() if v.get("partner") == "__anders__" else v.get("partner", "")
         reserve = v.get("reserve_tijd") if "reserve" in v else None
         return planner.wijzig_reeks(v["id"], int(v["weekdag"]), v["tijd"], partner,
-                                    int(v.get("baan") or 0), reserve)
+                                    int(v.get("baan") or 0), reserve, uitnodiging_vlag(v))
     if actie == "annuleer":
         planner.annuleer(v["id"])
         return "Geplande boeking geannuleerd."

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import boeker
 import ha
+import uitnodiging
 from boeker import CFG, DAGEN, DATA, TZ, log, momenten, nu
 
 PLANNEN = DATA / "plannen.json"
@@ -77,6 +78,37 @@ def dag_tekst(datum: str, tijd: str | None = None) -> str:
     return f"{DAGEN[d.weekday()]} {d:%d-%m}" + (f" {tijd}" if tijd else "")
 
 
+# --------------------------------------------------------------------------- agenda-uitnodiging
+def _sync(job_id: str, inv: dict | None = None) -> None:
+    """Zet agenda/mail in lijn met 'inv' van de boeking (op de achtergrond, in volgorde)."""
+    def taak():
+        j = job(job_id)
+        huidig = inv or (j.get("inv") if j else None)
+        if not huidig:
+            return
+        nieuw_inv = uitnodiging.synchroniseer(dict(huidig))
+        if j:
+            werk_bij(job_id, inv=nieuw_inv)
+    uitnodiging.in_wachtrij(taak)
+
+
+def _nieuwe_inv(datum: str, tijd: str, partner: str, aan: bool, oud: dict | None = None) -> dict | None:
+    """inv voor een (gewijzigde) boeking. aan=False -> bestaande afspraak laten verdwijnen."""
+    if aan and uitnodiging.beschikbaar():
+        inv = dict(oud) if oud else uitnodiging.nieuw(datum, tijd, partner)
+        inv["doel"] = {"start": f"{datum} {tijd}", "partner": partner, "baan": None}
+        return inv
+    if oud and oud.get("gedaan"):
+        return dict(oud, doel=None)
+    return None
+
+
+def _inv_annuleren(j: dict | None) -> None:
+    if j and j.get("inv") and (j["inv"].get("gedaan") or j["inv"].get("doel")):
+        _sync(j["id"], dict(j["inv"], doel=None))
+        werk_bij(j["id"], inv=dict(j["inv"], doel=None))
+
+
 # --------------------------------------------------------------------------- clubregels
 def conflict(datum: str, tijd: str, negeer: tuple[str, ...] = ()) -> str | None:
     """Controleert de clubregels: max. N boekingen per dag en niet twee uur achter elkaar."""
@@ -104,7 +136,8 @@ def conflict(datum: str, tijd: str, negeer: tuple[str, ...] = ()) -> str | None:
 # --------------------------------------------------------------------------- inplannen
 def plan(datum: str, tijd: str, partner: str, test: bool = False,
          reserve_tijd: str | None = None, reeks: str | None = None,
-         stil: bool = False, voorkeursbaan: int | None = None) -> str:
+         stil: bool = False, voorkeursbaan: int | None = None,
+         agenda_uitnodiging: bool = True) -> str:
     partner = (partner or CFG["standaard_partner"] or "").strip()
     if not partner:
         raise ValueError("Kies een medespeler (of vul standaard_partner in bij de instellingen).")
@@ -134,9 +167,16 @@ def plan(datum: str, tijd: str, partner: str, test: bool = False,
                            reserve_van=hoofd["id"])
             hoofd["reserve_id"] = reserve["id"]
             nieuw.append(reserve)
+        hoofd["uitnodiging"] = bool(agenda_uitnodiging) and not test
+        if hoofd["uitnodiging"]:
+            hoofd["inv"] = _nieuwe_inv(datum, tijd, partner, True)
+        for r_ in nieuw[1:]:
+            r_["uitnodiging"] = False                       # reserve neemt de afspraak pas over als nodig
         _schrijf(PLANNEN, lijst + nieuw)
     for j in nieuw:
         start_thread(j)
+    if hoofd.get("inv"):
+        _sync(hoofd["id"])
     wanneer = "nu direct (de baan is al open)" if start <= nu() else \
         f"{DAGEN[start.weekday()]} {start:%d-%m %H:%M}"
     tekst = (f"{'Test: ' if test else ''}{dag_tekst(datum, tijd)} met {partner}"
@@ -159,12 +199,13 @@ def annuleer(job_id: str, reden: str = "geannuleerd") -> None:
         k = job(jid)
         if k and k["status"] in ("gepland", "wacht"):
             werk_bij(jid, status="geannuleerd")
+        _inv_annuleren(k)
     log(f"Boeking {dag_tekst(j['datum'], j['tijd'])} {reden}.")
     werk_sensoren_bij()
 
 
 def wijzig(job_id: str, datum: str, tijd: str, partner: str, voorkeursbaan: int | None,
-           reserve_tijd: str | None) -> str:
+           reserve_tijd: str | None, agenda_uitnodiging: bool = True) -> str:
     """Past een geplande boeking aan (datum, tijd, medespeler, baan, reservetijd)."""
     j = job(job_id)
     if not j or j.get("reserve_van"):
@@ -208,9 +249,15 @@ def wijzig(job_id: str, datum: str, tijd: str, partner: str, voorkeursbaan: int 
                            reserve_van=hoofd["id"])
             hoofd["reserve_id"] = reserve["id"]
             nieuw.append(reserve)
+        hoofd["uitnodiging"] = bool(agenda_uitnodiging) and not j.get("test")
+        hoofd["inv"] = _nieuwe_inv(datum, tijd, partner, hoofd["uitnodiging"], j.get("inv"))
+        for r_ in nieuw[1:]:
+            r_["uitnodiging"] = False
         _schrijf(PLANNEN, [p for p in lijst if p["id"] not in eigen] + nieuw)
     for n in nieuw:
         start_thread(n)
+    if hoofd.get("inv"):
+        _sync(hoofd["id"])
     wanneer = "nu direct (de baan is al open)" if start <= nu() else \
         f"{DAGEN[start.weekday()]} {start:%d-%m %H:%M}"
     tekst = (f"{dag_tekst(datum, tijd)} met {partner}"
@@ -257,6 +304,11 @@ def voer_uit(j: dict) -> None:
             return
         werk_bij(j["id"], status="gepland")
         log(f"Hoofdboeking mislukt - reservetijd {j['tijd']} wordt geprobeerd.")
+        if hoofd.get("inv") and hoofd["inv"].get("doel"):          # afspraak verhuist mee naar de reservetijd
+            inv = dict(hoofd["inv"], doel=dict(hoofd["inv"]["doel"], start=f"{j['datum']} {j['tijd']}"))
+            werk_bij(j["id"], inv=inv, uitnodiging=True)
+            werk_bij(hoofd["id"], inv=None)
+            _sync(j["id"])
     else:
         repetitie = opening - timedelta(minutes=REPETITIE_MINUTEN)
         if not j.get("test") and repetitie - nu() > timedelta(minutes=1):
@@ -291,10 +343,17 @@ def voer_uit(j: dict) -> None:
                         if b["datum"] == j["datum"] and b["tijd"] == j["tijd"]), None)
             if rid:
                 knoppen.append((f"CLUBANNULEER_{rid}", "Baan annuleren"))
-        eind = speelmoment + timedelta(hours=1)
-        ha.agenda(f"Tennis met {u['partner']} (baan {u['baan']})",
-                  f"{speelmoment:%Y-%m-%d %H:%M:%S}", f"{eind:%Y-%m-%d %H:%M:%S}",
-                  "Geboekt door Tennis Boeker")
+        vers = job(j["id"]) or j
+        inv = vers.get("inv")
+        if inv is None and "uitnodiging" not in vers and uitnodiging.beschikbaar():
+            inv = uitnodiging.nieuw(j["datum"], j["tijd"], u["partner"])      # boeking van vóór 1.6.0
+        if inv:
+            inv = dict(inv, doel={"start": f"{j['datum']} {j['tijd']}", "partner": u["partner"],
+                                  "baan": u["baan"]})
+            werk_bij(j["id"], inv=inv)
+            _sync(j["id"], inv)
+    if not u["gelukt"] and not j.get("reserve_id"):
+        _inv_annuleren(job(j["id"]))                                    # geen baan: afspraak weg
     titel = "Tennisbaan geboekt" if u["gelukt"] else "Tennisbaan NIET geboekt"
     if not u["gelukt"] and j.get("reserve_id"):
         titel += " - reservetijd volgt"
@@ -308,14 +367,14 @@ def start_thread(j: dict) -> None:
 
 # --------------------------------------------------------------------------- vaste boekingen
 def maak_reeks(datum: str, tijd: str, partner: str, reserve_tijd: str | None,
-               voorkeursbaan: int | None = None) -> str:
+               voorkeursbaan: int | None = None, agenda_uitnodiging: bool = True) -> str:
     partner = (partner or CFG["standaard_partner"] or "").strip()
     weekdag = datetime.strptime(datum, "%Y-%m-%d").weekday()
     reeks = {"id": uuid.uuid4().hex[:8], "weekdag": weekdag, "tijd": tijd, "partner": partner,
              "reserve_tijd": reserve_tijd, "voorkeursbaan": voorkeursbaan, "actief": True,
-             "sinds": f"{nu():%d-%m-%Y}"}
+             "uitnodiging": bool(agenda_uitnodiging), "sinds": f"{nu():%d-%m-%Y}"}
     tekst = plan(datum, tijd, partner, reserve_tijd=reserve_tijd, reeks=reeks["id"], stil=True,
-                 voorkeursbaan=voorkeursbaan)
+                 voorkeursbaan=voorkeursbaan, agenda_uitnodiging=agenda_uitnodiging)
     with SLOT:
         _schrijf(REEKSEN, reeksen() + [reeks])
     ha.meld("Vaste tennisboeking ingesteld",
@@ -336,7 +395,8 @@ def stop_reeks(reeks_id: str) -> None:
 
 
 def wijzig_reeks(reeks_id: str, weekdag: int, tijd: str, partner: str,
-                 voorkeursbaan: int | None, reserve_tijd: str | None) -> str:
+                 voorkeursbaan: int | None, reserve_tijd: str | None,
+                 agenda_uitnodiging: bool = True) -> str:
     """Past een vaste boeking aan. Geplande boekingen van deze reeks die je niet los hebt
     gewijzigd, worden opnieuw ingepland met de nieuwe instellingen."""
     if not 0 <= weekdag <= 6:
@@ -350,7 +410,8 @@ def wijzig_reeks(reeks_id: str, weekdag: int, tijd: str, partner: str,
             raise ValueError("Deze vaste boeking bestaat niet (meer).")
         partner = (partner or "").strip() or r["partner"]
         r.update(weekdag=weekdag, tijd=tijd, partner=partner, voorkeursbaan=voorkeursbaan,
-                 reserve_tijd=reserve_tijd, gewijzigd=f"{nu():%d-%m %H:%M}")
+                 reserve_tijd=reserve_tijd, uitnodiging=bool(agenda_uitnodiging),
+                 gewijzigd=f"{nu():%d-%m %H:%M}")
         _schrijf(REEKSEN, lijst)
         # geplande (niet los gewijzigde) boekingen van deze reeks stoppen en weghalen
         weg = set()
@@ -365,6 +426,9 @@ def wijzig_reeks(reeks_id: str, weekdag: int, tijd: str, partner: str,
                     weg.add(p["reserve_id"])
         for jid in weg:
             STOP.setdefault(jid, threading.Event()).set()
+        for p in plannen():
+            if p["id"] in weg and p.get("inv"):
+                _sync(p["id"], dict(p["inv"], doel=None))              # oude afspraken annuleren
         _schrijf(PLANNEN, [p for p in plannen() if p["id"] not in weg])
     vul_reeksen()                                     # opnieuw inplannen met nieuwe instellingen
     tekst = (f"elke {DAGEN[weekdag]} om {tijd} met {partner}"
@@ -392,7 +456,8 @@ def vul_reeksen() -> None:
                 continue                     # bestaat al (of is bewust geannuleerd)
             try:
                 plan(datum, r["tijd"], r["partner"], reserve_tijd=r.get("reserve_tijd"),
-                     reeks=r["id"], voorkeursbaan=r.get("voorkeursbaan"))
+                     reeks=r["id"], voorkeursbaan=r.get("voorkeursbaan"),
+                     agenda_uitnodiging=r.get("uitnodiging", True))
             except ValueError as e:
                 with SLOT:
                     _schrijf(PLANNEN, plannen() + [{
@@ -423,6 +488,10 @@ def annuleer_club(reservation_id: str) -> str:
     b = next((b for b in club()["boekingen"] if b["id"] == reservation_id), None)
     omschrijving = dag_tekst(b["datum"], b["tijd"]) if b else "boeking"
     _bewaar_club(boeker.annuleer_clubboeking(reservation_id))
+    if b:
+        for p in plannen():
+            if (p["status"] == "geboekt" and (p["datum"], p["tijd"]) == (b["datum"], b["tijd"])):
+                _inv_annuleren(p)
     ha.meld("Tennisbaan geannuleerd", f"{omschrijving} is geannuleerd op de clubsite.")
     werk_sensoren_bij()
     return f"{omschrijving} is geannuleerd op de clubsite."
@@ -554,6 +623,8 @@ def opstarten() -> None:
     for p in plannen():
         if p["status"] in ("gepland", "wacht"):
             start_thread(p)
+        if p.get("inv") and p["status"] in ("gepland", "wacht", "geboekt"):
+            _sync(p["id"])                         # na herstart: ontbrekende afspraken inhalen
     threading.Thread(target=ververs_club, daemon=True).start()
     threading.Thread(target=achtergrond, daemon=True, name="achtergrond").start()
     ha.luister_naar_knoppen(verwerk_knop)

@@ -1,5 +1,18 @@
 # Wijzigingen
 
+## 1.6.0
+- **Agenda-afspraak + uitnodiging**: bij elke boeking staat een vinkje *Agenda* (standaard aan).
+  Zodra je een boeking inplant komt er een afspraak in je Home Assistant-agenda, en de medespeler
+  krijgt een mail met uitnodiging (.ics) als zijn/haar adres bekend is.
+- De afspraak blijft kloppen: wijzig je tijd of medespeler, dan wordt hij bijgewerkt (nieuwe mail,
+  eventueel annulering aan de vorige medespeler). Wordt de reservetijd gebruikt, dan verhuist hij mee.
+  Zodra de baan bekend is komt het banennummer erbij. Mislukt de boeking, of annuleer je, dan
+  verdwijnt de afspraak en krijgt de medespeler een annulering.
+- Nieuwe instellingen: `mijn_naam`, `mijn_email`, `mail_service` en `partner_emails`
+  (lijst `Naam=adres`). Het vinkje is alleen zichtbaar als `agenda` en/of `mail_service` is ingesteld.
+- Ook voor vaste boekingen (vinkje bij aanmaken en wijzigen).
+- De add-on mag nu in `/share` schrijven (tijdelijk bestand voor de mailbijlage).
+
 ## 1.5.0
 - Vaste boekingen wijzigen: klik **Wijzigen** onder een vaste boeking en pas dag, tijd,
   medespeler, voorkeursbaan of reservetijd aan. Geldt voor alle komende weken.

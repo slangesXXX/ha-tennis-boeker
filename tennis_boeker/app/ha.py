@@ -4,6 +4,8 @@ ha.py - koppeling met Home Assistant via de Supervisor-API.
 - meld():        pushmelding (notify-service) met optionele knoppen, anders melding in HA
 - zet_sensor():  sensoren zoals sensor.tennis_volgende_baan
 - agenda():      afspraak in een HA-agenda (calendar.create_event)
+- agenda_verwijder(): zoekt zo'n afspraak terug en verwijdert hem (best effort)
+- mail():        mail met bijlage via een HA-notify-service (e-mail)
 - luister_naar_knoppen(): ontvangt knopdrukken uit pushmeldingen (websocket)
 """
 from __future__ import annotations
@@ -68,16 +70,86 @@ def zet_sensor(entity_id: str, staat: str, attributen: dict) -> None:
     _post(f"states/{entity_id}", {"state": staat, "attributes": attributen})
 
 
-def agenda(titel: str, start: str, eind: str, omschrijving: str = "") -> None:
-    """start/eind als 'YYYY-MM-DD HH:MM:SS'. Alleen als 'agenda' is ingesteld."""
+def agenda_entity() -> str:
     entity = (CFG.get("agenda") or "").strip()
-    if not entity:
-        return
-    if not entity.startswith("calendar."):
+    if entity and not entity.startswith("calendar."):
         entity = "calendar." + entity
-    _post("services/calendar/create_event",
-          {"entity_id": entity, "summary": titel, "start_date_time": start,
-           "end_date_time": eind, "description": omschrijving})
+    return entity
+
+
+def agenda(titel: str, start: str, eind: str, omschrijving: str = "", locatie: str = "") -> bool:
+    """start/eind als 'YYYY-MM-DD HH:MM:SS'. Alleen als 'agenda' is ingesteld."""
+    entity = agenda_entity()
+    if not entity:
+        return False
+    data = {"entity_id": entity, "summary": titel, "start_date_time": start,
+            "end_date_time": eind, "description": omschrijving}
+    if locatie:
+        data["location"] = locatie
+    return _post("services/calendar/create_event", data)
+
+
+def _ws_commando(commando: dict) -> dict:
+    """Eenmalig websocket-commando (voor dingen die de REST-API niet kent)."""
+    import websocket  # pakket websocket-client
+    ws = websocket.create_connection("ws://supervisor/core/websocket", timeout=10)
+    try:
+        json.loads(ws.recv())
+        ws.send(json.dumps({"type": "auth", "access_token": TOKEN}))
+        if json.loads(ws.recv()).get("type") != "auth_ok":
+            raise RuntimeError("websocket-authenticatie mislukt")
+        ws.send(json.dumps({"id": 1, **commando}))
+        while True:
+            antwoord = json.loads(ws.recv())
+            if antwoord.get("id") == 1:
+                return antwoord
+    finally:
+        ws.close()
+
+
+def agenda_verwijder(marker: str, rond: str) -> bool:
+    """Verwijdert de afspraak waarvan de omschrijving `marker` bevat (zoekt rond het
+    tijdstip `rond`, 'YYYY-MM-DD HH:MM:SS' in NL-tijd). True als weg (of niet gevonden)."""
+    import urllib.parse
+    from datetime import datetime, timedelta
+    from boeker import TZ
+    entity = agenda_entity()
+    if not entity or not TOKEN:
+        return False
+    try:
+        t = datetime.strptime(rond, "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+        q = urllib.parse.urlencode({"start": (t - timedelta(days=1)).isoformat(),
+                                    "end": (t + timedelta(days=2)).isoformat()})
+        req = urllib.request.Request(f"{API}/calendars/{entity}?{q}",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        gevonden = json.loads(urllib.request.urlopen(req, timeout=10).read().decode("utf-8"))
+        ok = True
+        for ev in gevonden:
+            if marker in (ev.get("description") or ""):
+                if not ev.get("uid"):
+                    ok = False                       # deze agenda geeft geen id: kan niet wissen
+                    continue
+                cmd = {"type": "calendar/event/delete", "entity_id": entity, "uid": ev["uid"]}
+                if ev.get("recurrence_id"):
+                    cmd["recurrence_id"] = ev["recurrence_id"]
+                if not _ws_commando(cmd).get("success"):
+                    ok = False
+        return ok
+    except Exception as ex:
+        log(f"Agenda-afspraak verwijderen mislukt: {ex}")
+        return False
+
+
+def mail(service: str, ontvanger: str, onderwerp: str, tekst: str, bijlage: str | None = None) -> bool:
+    """Mail via een notify-service (bijv. SMTP). Met bijlage-pad als 'bijlage'; lukt dat
+    niet (bijv. map niet toegestaan), dan gaat de mail zonder bijlage."""
+    service = (service or "").strip().removeprefix("notify.")
+    if not service:
+        return False
+    basis = {"title": onderwerp, "message": tekst, "target": [ontvanger]}
+    if bijlage and _post(f"services/notify/{service}", dict(basis, data={"images": [bijlage]})):
+        return True
+    return _post(f"services/notify/{service}", basis)
 
 
 def luister_naar_knoppen(verwerk) -> None:
