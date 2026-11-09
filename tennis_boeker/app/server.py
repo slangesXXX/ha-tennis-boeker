@@ -92,7 +92,7 @@ function bijwerken(f){
  if(rv&&f.reserve){rv.classList.toggle('verborgen',!f.reserve.checked);
   if(f.reserve.checked&&f.reserve_tijd.value<=f.tijd.value){const u=Math.min(23,parseInt(f.tijd.value)+1);
   f.reserve_tijd.value=String(u).padStart(2,'0')+':00';}}
- const h=f.querySelector('.hint'),d=f.datum.value,t=f.tijd.value; if(!h||!d)return;
+ const h=f.querySelector('.hint'),d=f.datum?f.datum.value:'',t=f.tijd.value; if(!h||!d)return;
  const s=new Date(d+'T'+t),o=new Date(s.getTime()-DAGEN_VOORUIT*864e5);
  h.textContent=lang[s.getDay()]+' · baan gaat open '+kort[o.getDay()]+' '+
   o.toLocaleDateString('nl-NL',{day:'2-digit',month:'2-digit'})+' '+t+(f.herhaal&&f.herhaal.checked?' · daarna elke week':'');}
@@ -136,6 +136,28 @@ def wijzig_formulier(p: dict, reserve: dict | None, namen: list[str], tijden: li
 </div>
 <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
 <button>Wijziging opslaan</button><span class="hint klein"></span></div>
+</form></details>"""
+
+
+def reeks_formulier(r: dict, namen: list[str], tijden: list[str]) -> str:
+    """Inklapbaar formulier om een vaste boeking aan te passen."""
+    partners = namen if r["partner"] in namen else [r["partner"]] + namen
+    banen = list(range(0, CFG["aantal_banen"] + 1))
+    return f"""<details class="wijzig"><summary>Wijzigen</summary>
+<form class="plan" method="post" action="wijzigreeks"><input type="hidden" name="id" value="{e(r['id'])}">
+<div class="velden">
+<label>Dag<select name="weekdag">{opties(list(range(7)), r['weekdag'], dict(enumerate(DAGEN)))}</select></label>
+<label>Starttijd<select name="tijd">{opties(tijden, r['tijd'])}</select></label>
+<label>Medespeler<select name="partner">{opties(partners + ['__anders__'], r['partner'], {'__anders__': 'Andere naam…'})}</select></label>
+<label>Voorkeursbaan<select name="baan">{opties(banen, r.get('voorkeursbaan') or 0, {0: 'Geen voorkeur', **{n: f'Baan {n}' for n in banen if n}})}</select></label>
+<label class="anders verborgen">Naam medespeler<input name="anders" placeholder="Voor- en achternaam"></label>
+</div>
+<div class="opties">
+<label class="check"><input type="checkbox" name="reserve"{' checked' if r.get('reserve_tijd') else ''}> Reservetijd als het niet lukt</label>
+<label class="reservevak verborgen"><select name="reserve_tijd">{opties(tijden, r.get('reserve_tijd') or '')}</select></label>
+</div>
+<div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+<button>Wijziging opslaan</button><span class="klein">Geldt voor alle komende weken. Weken die je los hebt gewijzigd blijven zoals ze zijn.</span></div>
 </form></details>"""
 
 
@@ -288,7 +310,7 @@ def pagina(bericht: str = "", fout: bool = False) -> str:
             + knop("stopreeks", "Stoppen", r["id"],
                    vraag=f"Vaste boeking elke {DAGEN[r['weekdag']]} {r['tijd']} stoppen? "
                          f"Geplande boekingen hiervan worden ook geannuleerd.")
-            + "</div>" for r in vast)
+            + "</div>" + reeks_formulier(r, namen, tijden) for r in vast)
         vaste = f'<div class="kaart"><h2>Vaste boekingen</h2><div class="lijst">{items}</div></div>'
 
     # ---- afgerond
@@ -350,6 +372,11 @@ def voer_actie(actie: str, v: dict) -> str:
         partner = v.get("anders", "").strip() if v.get("partner") == "__anders__" else v.get("partner", "")
         reserve = v.get("reserve_tijd") if "reserve" in v else None
         return planner.wijzig(v["id"], v["datum"], v["tijd"], partner, int(v.get("baan") or 0), reserve)
+    if actie == "wijzigreeks":
+        partner = v.get("anders", "").strip() if v.get("partner") == "__anders__" else v.get("partner", "")
+        reserve = v.get("reserve_tijd") if "reserve" in v else None
+        return planner.wijzig_reeks(v["id"], int(v["weekdag"]), v["tijd"], partner,
+                                    int(v.get("baan") or 0), reserve)
     if actie == "annuleer":
         planner.annuleer(v["id"])
         return "Geplande boeking geannuleerd."

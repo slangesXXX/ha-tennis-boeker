@@ -335,6 +335,47 @@ def stop_reeks(reeks_id: str) -> None:
             annuleer(p["id"], "geannuleerd (vaste boeking gestopt)")
 
 
+def wijzig_reeks(reeks_id: str, weekdag: int, tijd: str, partner: str,
+                 voorkeursbaan: int | None, reserve_tijd: str | None) -> str:
+    """Past een vaste boeking aan. Geplande boekingen van deze reeks die je niet los hebt
+    gewijzigd, worden opnieuw ingepland met de nieuwe instellingen."""
+    if not 0 <= weekdag <= 6:
+        raise ValueError("Onbekende dag.")
+    if reserve_tijd and reserve_tijd <= tijd:
+        raise ValueError("De reservetijd moet later zijn dan de gewenste tijd.")
+    with SLOT:
+        lijst = reeksen()
+        r = next((x for x in lijst if x["id"] == reeks_id and x["actief"]), None)
+        if not r:
+            raise ValueError("Deze vaste boeking bestaat niet (meer).")
+        partner = (partner or "").strip() or r["partner"]
+        r.update(weekdag=weekdag, tijd=tijd, partner=partner, voorkeursbaan=voorkeursbaan,
+                 reserve_tijd=reserve_tijd, gewijzigd=f"{nu():%d-%m %H:%M}")
+        _schrijf(REEKSEN, lijst)
+        # geplande (niet los gewijzigde) boekingen van deze reeks stoppen en weghalen
+        weg = set()
+        for p in plannen():
+            if (p.get("reeks") == reeks_id and p["status"] in ("gepland", "wacht")
+                    and not p.get("gewijzigd")):
+                _, _, start = momenten(p["datum"], p["tijd"])
+                if start - nu() < timedelta(seconds=30):
+                    continue                          # al bezig: laten lopen
+                weg.add(p["id"])
+                if p.get("reserve_id"):
+                    weg.add(p["reserve_id"])
+        for jid in weg:
+            STOP.setdefault(jid, threading.Event()).set()
+        _schrijf(PLANNEN, [p for p in plannen() if p["id"] not in weg])
+    vul_reeksen()                                     # opnieuw inplannen met nieuwe instellingen
+    tekst = (f"elke {DAGEN[weekdag]} om {tijd} met {partner}"
+             f"{f', voorkeur baan {voorkeursbaan}' if voorkeursbaan else ''}"
+             f"{f', reserve {reserve_tijd}' if reserve_tijd else ''}")
+    log(f"Vaste boeking gewijzigd: {tekst}")
+    ha.meld("Vaste tennisboeking gewijzigd", tekst[0].upper() + tekst[1:] + ".")
+    werk_sensoren_bij()
+    return f"Vaste boeking gewijzigd: {tekst}."
+
+
 def vul_reeksen() -> None:
     """Maakt voor elke vaste boeking de eerstvolgende boeking aan zodra die in beeld komt."""
     for r in [r for r in reeksen() if r["actief"]]:

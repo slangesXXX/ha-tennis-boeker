@@ -1,5 +1,11 @@
 # Wijzigingen
 
+## 1.5.0
+- Vaste boekingen wijzigen: klik **Wijzigen** onder een vaste boeking en pas dag, tijd,
+  medespeler, voorkeursbaan of reservetijd aan. Geldt voor alle komende weken.
+- Al ingeplande weken van die vaste boeking worden direct opnieuw ingepland met de nieuwe
+  instellingen; weken die je los hebt gewijzigd blijven zoals ze zijn.
+
 ## 1.4.1
 - Boeken op dagen 1 t/m 9 van de maand mislukte: de clubsite schrijft '3-11-2026', de add-on
   zocht naar '03-11-2026' en stopte voor de zekerheid. Beide schrijfwijzen worden nu herkend.
